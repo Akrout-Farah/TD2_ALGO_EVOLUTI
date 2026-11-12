@@ -1,241 +1,275 @@
+# ===========================================================================
+# cedule_maintenance.py
+# Cédule de maintenance de centrales électriques par algorithme génétique
 #
-# cedule.py — Cédule de maintenance de centrales électriques
-# Algorithme génétique : sélection par loterie, croisement, 3 mutations comparées
+# Un individu (chromosome) = liste de 7 gènes de 4 bits (un gène par unité).
+# Exemple : ['0110', '0011', '0001', '1000', '0100', '0010', '1000']
+#   - un bit à '1' : l'unité est en maintenance pendant cet intervalle
+#   - un bit à '0' : l'unité fonctionne
 #
+# Opérateurs :
+#   - sélection  : loterie (roulette) + élitisme
+#   - croisement : simple (1 point), double (2 points), uniforme (masque)
+#   - mutation   : remplacement d'un gène par un gène valide de la même unité
+#   - probabilités : Pc (croisement) et Pm (mutation)
+# ===========================================================================
 
-import itertools
 import random
-import statistics
-
-# ---------------------------------------------------------------------------
-# 1. Données du problème
-# ---------------------------------------------------------------------------
-CAPACITES = [20, 15, 35, 40, 15, 15, 10]    # MW de chaque unité
-DUREES = [2, 2, 1, 1, 1, 1, 1]              # intervalles de maintenance requis
-DEMANDES = [80, 90, 65, 70]                 # MW demandés par intervalle
-CAPACITE_TOTALE = sum(CAPACITES)            # 150 MW
-NB_UNITES = len(CAPACITES)
-NB_INTERVALLES = len(DEMANDES)
 
 
-def genes_unite(duree):
-    """Gènes de 4 bits valides pour une unité (intervalles consécutifs).
-    durée 2 : 1100, 0110, 0011 ; durée 1 : 1000, 0100, 0010, 0001."""
-    genes = []
-    for debut in range(NB_INTERVALLES - duree + 1):
-        bits = ["0"] * NB_INTERVALLES
-        bits[debut:debut + duree] = ["1"] * duree
-        genes.append("".join(bits))
-    return genes
+
+# 1. DONNÉES ET PARAMÈTRES
+
+# Capacité de chaque unité (MW)
+CAPACITES = [20, 15, 35, 40, 15, 15, 10]
+# Demande d'énergie (MW) dans chacun des 4 intervalles
+DEMANDES = [80, 90, 65, 70]
+
+NB_GENES = len(CAPACITES)             # 7 unités = 7 gènes
+NB_INTERVALLES = len(DEMANDES)        # 4 intervalles
+CAPACITE_TOTALE = sum(CAPACITES)      # 150 MW
+
+# Gènes valides pour les unités 1 et 2 (2 intervalles de maintenance consécutifs)
+GROUPE1 = ['1100', '0110', '0011']
+# Gènes valides pour les unités 3 à 7 (1 seul intervalle de maintenance)
+GROUPE2 = ['1000', '0100', '0010', '0001']
+
+# Paramètres de l'algorithme (modifiables)
+NB_INDIVIDUS = 20        # nombre d'individus par génération
+NB_GENERATIONS = 20      # nombre de générations
+P_CROISEMENT = 0.8       # Pc : probabilité de croiser deux parents
+P_MUTATION = 0.1         # Pm : probabilité de muter un enfant
 
 
-GENES_VALIDES = [genes_unite(d) for d in DUREES]
+def genes_valides(position):
+    """Retourne la liste des gènes valides pour l'unité située à cette position."""
+    if position < 2:
+        return GROUPE1
+    return GROUPE2
 
-# Unités ayant la même durée (pour la mutation par échange)
-GROUPES = [[u for u in range(NB_UNITES) if DUREES[u] == d]
-           for d in sorted(set(DUREES))]
 
 
-# ---------------------------------------------------------------------------
-# 2. Évaluation d'un chromosome
-# ---------------------------------------------------------------------------
-def calculer_reserves(chromosome):
-    """Réserve = capacité totale - puissance en maintenance - demande."""
+# 2. CRÉATION DE LA POPULATION INITIALE
+
+def creer_individu():
+    """Crée un individu : un gène valide choisi au hasard pour chaque unité."""
+    return [random.choice(genes_valides(i)) for i in range(NB_GENES)]
+
+
+def creer_generation():
+    """Crée la génération initiale (sans individus identiques)."""
+    generation = []
+    while len(generation) < NB_INDIVIDUS:
+        individu = creer_individu()
+        if individu not in generation:
+            generation.append(individu)
+    return generation
+
+
+
+# 3. ÉVALUATION
+
+def puissance_en_maintenance(individu):
+    """Puissance (MW) indisponible dans chacun des 4 intervalles."""
     resultat = []
     for t in range(NB_INTERVALLES):
-        en_maintenance = sum(CAPACITES[u] for u in range(NB_UNITES)
-                             if chromosome[u][t] == "1")
-        resultat.append(CAPACITE_TOTALE - en_maintenance - DEMANDES[t])
+        total = 0
+        for u in range(NB_GENES):
+            total += int(individu[u][t]) * CAPACITES[u]
+        resultat.append(total)
     return resultat
 
 
-def fitness(chromosome):
-    """Performance = plus petite réserve (0 si une réserve est négative)."""
-    return max(0, min(calculer_reserves(chromosome)))
+def reserves(individu):
+    """Réserve de chaque intervalle = capacité totale - maintenance - demande."""
+    puissance = puissance_en_maintenance(individu)
+    return [CAPACITE_TOTALE - puissance[t] - DEMANDES[t]
+            for t in range(NB_INTERVALLES)]
 
 
-# ---------------------------------------------------------------------------
-# 3. Population initiale
-# ---------------------------------------------------------------------------
-def creer_individu():
-    return [random.choice(GENES_VALIDES[u]) for u in range(NB_UNITES)]
+def score(individu):
+    """Score = la plus petite réserve (0 si une réserve est négative).
+    Plus le score est grand, meilleur est l'individu."""
+    return max(0, min(reserves(individu)))
 
 
-def creer_population(taille):
-    return [creer_individu() for _ in range(taille)]
+# 4. SÉLECTION PAR ROULETTE
 
-
-# ---------------------------------------------------------------------------
-# 4. Sélection par loterie (roulette)
-# ---------------------------------------------------------------------------
-def selection_loterie(population, scores):
-    """Chance d'être choisi proportionnelle à la fitness.
-    Si toutes les fitness sont nulles, tirage uniforme."""
+    """Choisit un parent au hasard : plus le score est grand, plus l'individu
+    a de chances d'être choisi. Si tous les scores sont nuls, on tire au hasard."""
     total = sum(scores)
     if total == 0:
         return random.choice(population)
+
     tirage = random.uniform(0, total)
     cumul = 0
-    for individu, score in zip(population, scores):
-        cumul += score
+    for individu, s in zip(population, scores):
+        cumul += s
         if cumul >= tirage:
             return individu
     return population[-1]
 
 
-# ---------------------------------------------------------------------------
-# 5. Croisement (un point, toujours entre deux blocs de 4 bits)
-# ---------------------------------------------------------------------------
-def croisement(parent1, parent2):
-    coupure = random.randint(1, NB_UNITES - 1)
-    return (parent1[:coupure] + parent2[coupure:],
-            parent2[:coupure] + parent1[coupure:])
+
+# 5. CROISEMENTS
+#    On croise toujours des gènes entiers (blocs de 4 bits) : les enfants
+#    sont donc toujours des cédules valides.
+#    Chaque fonction reçoit 2 parents et retourne 2 enfants.
+
+def croisement_simple(parent1, parent2, position):
+    """Croisement à 1 point de coupure.
+       
+    """
+    enfant1 = parent2[:position] + parent1[position:]
+    enfant2 = parent1[:position] + parent2[position:]
+    return enfant1, enfant2
 
 
-# ---------------------------------------------------------------------------
-# 6. Mutations (toujours sur des blocs entiers -> cédule toujours valide)
-# ---------------------------------------------------------------------------
-def mutation_inversion(chromosome):
-    """Inverse l'ordre des 4 bits d'un gène : 1100 -> 0011, 1000 -> 0001.
-    Limite : 0110 reste 0110, et 0100 / 0010 ne font que s'échanger."""
-    c = chromosome[:]
-    u = random.randrange(NB_UNITES)
-    c[u] = c[u][::-1]
-    return c
+def croisement_double(parent1, parent2, position1, position2):
+    """Croisement à 2 points de coupure : on échange la partie du milieu.
+      
+    """
+    enfant1 = parent1[:position1] + parent2[position1:position2] + parent1[position2:]
+    enfant2 = parent2[:position1] + parent1[position1:position2] + parent2[position2:]
+    return enfant1, enfant2
 
 
-def mutation_remplacement(chromosome):
-    """Remplace un gène par une autre configuration valide de la même unité
-    (comme sur la diapo : 0001 -> 0100)."""
-    c = chromosome[:]
-    u = random.randrange(NB_UNITES)
-    c[u] = random.choice([g for g in GENES_VALIDES[u] if g != c[u]])
-    return c
+def croisement_uniforme(parent1, parent2, masque=None):
+    """Croisement uniforme : un masque de 7 bits décide, gène par gène.
+       masque = 1 -> enfant1 prend le gène du parent1, enfant2 celui du parent2
+       masque = 0 -> enfant1 prend le gène du parent2, enfant2 celui du parent1
+       
+    """
+    if masque is None:
+        masque = [random.randint(0, 1) for _ in range(NB_GENES)]
+    enfant1 = []
+    enfant2 = []
+    for i in range(NB_GENES):
+        if masque[i] == 1:
+            enfant1.append(parent1[i])
+            enfant2.append(parent2[i])
+        else:
+            enfant1.append(parent2[i])
+            enfant2.append(parent1[i])
+    return enfant1, enfant2
 
 
-def mutation_echange(chromosome):
-    """Échange les gènes de deux unités qui ont la même durée de maintenance
-    (la cédule reste valide car les gènes sont compatibles)."""
-    c = chromosome[:]
-    groupe = random.choice([g for g in GROUPES if len(g) >= 2])
-    i, j = random.sample(groupe, 2)
-    c[i], c[j] = c[j], c[i]
-    return c
+def croiser(parent1, parent2, type_croisement):
+    """Croise deux parents avec le type choisi : "simple", "double" ou "uniforme".
+    Les positions de coupure sont tirées au hasard."""
+    if type_croisement == "simple":
+        position = random.randint(1, NB_GENES - 1)
+        return croisement_simple(parent1, parent2, position)
+    if type_croisement == "double":
+        pos1, pos2 = sorted(random.sample(range(1, NB_GENES), 2))
+        return croisement_double(parent1, parent2, pos1, pos2)
+    return croisement_uniforme(parent1, parent2)
 
 
-MUTATIONS = {
-    "inversion": mutation_inversion,
-    "remplacement": mutation_remplacement,
-    "échange": mutation_echange,
-}
+# ===========================================================================
+# 6. MUTATION
+#    On remplace le gène situé à la position donnée par un gène valide
+#    pour cette unité (groupe 1 pour les unités 1 et 2, groupe 2 pour les autres).
+# ===========================================================================
+def mutation(individu, position):
+    if position < 2:
+        individu[position] = random.choice(GROUPE1)
+    else:
+        individu[position] = random.choice(GROUPE2)
+    return individu
 
 
-# ---------------------------------------------------------------------------
-# 7. Boucle principale de l'algorithme génétique
-# ---------------------------------------------------------------------------
-def algorithme_genetique(mutation=mutation_inversion, taille_pop=50,
-                         generations=100, p_croisement=0.8, p_mutation=0.1,
-                         graine=None):
-    """Retourne (meilleur chromosome, sa fitness, historique par génération)."""
-    if graine is not None:
-        random.seed(graine)
-
-    population = creer_population(taille_pop)
-    meilleur = max(population, key=fitness)
-    historique = []
-
-    for _ in range(generations):
-        scores = [fitness(ind) for ind in population]
-
-        courant = population[scores.index(max(scores))]
-        if fitness(courant) > fitness(meilleur):
-            meilleur = courant
-        historique.append(fitness(meilleur))
-
-        nouvelle = [meilleur]                      # élitisme
-        while len(nouvelle) < taille_pop:
-            p1 = selection_loterie(population, scores)
-            p2 = selection_loterie(population, scores)
-
-            if random.random() < p_croisement:
-                e1, e2 = croisement(p1, p2)
-            else:
-                e1, e2 = p1[:], p2[:]
-
-            if random.random() < p_mutation:
-                e1 = mutation(e1)
-            if random.random() < p_mutation:
-                e2 = mutation(e2)
-
-            nouvelle.extend([e1, e2])
-        population = nouvelle[:taille_pop]
-
-    # la dernière génération doit aussi être évaluée
-    for ind in population:
-        if fitness(ind) > fitness(meilleur):
-            meilleur = ind
-
-    return meilleur, fitness(meilleur), historique
-
-
-# ---------------------------------------------------------------------------
-# 8. Vérification : optimum exact par force brute (3 x 3 x 4^5 = 9216 cédules)
-# ---------------------------------------------------------------------------
-def optimum_force_brute():
-    meilleur, f_max = None, -1
-    for combinaison in itertools.product(*GENES_VALIDES):
-        chromosome = list(combinaison)
-        f = fitness(chromosome)
-        if f > f_max:
-            meilleur, f_max = chromosome, f
-    return meilleur, f_max
-
-
-# ---------------------------------------------------------------------------
-# 9. Affichage et expériences
-# ---------------------------------------------------------------------------
-def afficher(chromosome):
-    print("  Chromosome :", " ".join(chromosome))
-    for u, gene in enumerate(chromosome, start=1):
-        intervalles = [str(t + 1) for t in range(NB_INTERVALLES) if gene[t] == "1"]
-        print(f"    Unité {u} ({CAPACITES[u - 1]} MW) : "
+# ===========================================================================
+# 7. AFFICHAGE
+# ===========================================================================
+def afficher_detail(individu):
+    """Affiche la cédule d'un individu : maintenance de chaque unité et réserves."""
+    print("  Chromosome :", individu)
+    for u in range(NB_GENES):
+        intervalles = [str(t + 1) for t in range(NB_INTERVALLES)
+                       if individu[u][t] == "1"]
+        print(f"  Unité {u + 1} ({CAPACITES[u]} MW) : "
               f"maintenance aux intervalles {', '.join(intervalles)}")
-    print("  Réserves :", calculer_reserves(chromosome))
-    print("  Fitness (plus petite réserve) :", fitness(chromosome), "MW")
+    print("  Réserves :", reserves(individu))
+    print("  Score (plus petite réserve) :", score(individu), "MW")
 
 
-def fitness_moyenne(nb_essais, **params):
-    return statistics.mean(
-        algorithme_genetique(graine=s, **params)[1] for s in range(nb_essais))
+# ===========================================================================
+# 8. ALGORITHME GÉNÉTIQUE (boucle principale)
+# ===========================================================================
+def executer(type_croisement):
+    """Lance l'algorithme génétique avec le type de croisement choisi.
+    Retourne le meilleur individu trouvé."""
+    population = creer_generation()
+    meilleur = max(population, key=score)
+
+    for numero in range(1, NB_GENERATIONS + 1):
+        # 1) Évaluation de la génération
+        scores = [score(individu) for individu in population]
+        courant = population[scores.index(max(scores))]
+        if score(courant) > score(meilleur):
+            meilleur = courant
+        print(f"Génération {numero:2d} : meilleur score = {score(meilleur)}")
+
+        # 2) Nouvelle génération : on garde d'abord le meilleur (élitisme)
+        nouvelle = [meilleur]
+        while len(nouvelle) < NB_INDIVIDUS:
+            # Sélection de 2 parents par loterie
+            parent1 = selection_loterie(population, scores)
+            parent2 = selection_loterie(population, scores)
+
+            # Croisement avec la probabilité Pc, sinon les enfants copient les parents
+            if random.random() < P_CROISEMENT:
+                enfant1, enfant2 = croiser(parent1, parent2, type_croisement)
+            else:
+                enfant1, enfant2 = parent1[:], parent2[:]
+
+            # Mutation avec la probabilité Pm (sur une position tirée au hasard)
+            if random.random() < P_MUTATION:
+                enfant1 = mutation(enfant1, random.randint(0, NB_GENES - 1))
+            if random.random() < P_MUTATION:
+                enfant2 = mutation(enfant2, random.randint(0, NB_GENES - 1))
+
+            nouvelle.append(enfant1)
+            nouvelle.append(enfant2)
+
+        population = nouvelle[:NB_INDIVIDUS]
+
+    # La dernière génération doit aussi être évaluée
+    for individu in population:
+        if score(individu) > score(meilleur):
+            meilleur = individu
+
+    print("\nMeilleur individu trouvé :")
+    afficher_detail(meilleur)
+    return meilleur
 
 
 if __name__ == "__main__":
-    # Exemple du cours : fitness attendue = 20
-    print("=== Exemple du cours ===")
-    afficher(["0110", "0011", "0001", "1000", "0100", "0010", "1000"])
+    # --- Démonstration des 3 croisements sur deux parents donnés ----------
+    parent1 = ['0110', '0011', '0001', '1000', '0100', '0010', '1000']
+    parent2 = ['1100', '0110', '0100', '0001', '0010', '1000', '0100']
+    print("Parent 1 :", parent1)
+    print("Parent 2 :", parent2)
 
-    opt, f_opt = optimum_force_brute()
-    print("\n=== Optimum exact (force brute) ===")
-    afficher(opt)
+    enfant1, enfant2 = croisement_simple(parent1, parent2, 4)
+    print("\nCroisement simple (coupure après le gène 4) :")
+    print("  enfant 1 :", enfant1)
+    print("  enfant 2 :", enfant2)
 
-    print("\n=== Comparaison des mutations (30 exécutions chacune) ===")
-    for nom, mut in MUTATIONS.items():
-        resultats = [algorithme_genetique(mutation=mut, graine=s)[1]
-                     for s in range(30)]
-        trouve = sum(1 for r in resultats if r == f_opt)
-        print(f"  {nom:<13} moyenne = {statistics.mean(resultats):5.2f} | "
-              f"min = {min(resultats)} | optimum trouvé {trouve}/30")
+    enfant1, enfant2 = croisement_double(parent1, parent2, 2, 5)
+    print("\nCroisement double (coupures après les gènes 2 et 5) :")
+    print("  enfant 1 :", enfant1)
+    print("  enfant 2 :", enfant2)
 
-    print("\n=== Influence de Pc et Pm (mutation par remplacement, 10 essais) ===")
-    pms = [0.05, 0.1, 0.2]
-    print("  Pc \\ Pm | " + " | ".join(f"{pm:>5}" for pm in pms))
-    for pc in [0.6, 0.8, 0.9]:
-        ligne = [f"{fitness_moyenne(10, mutation=mutation_remplacement, p_croisement=pc, p_mutation=pm):>5.1f}"
-                 for pm in pms]
-        print(f"  {pc:>7} | " + " | ".join(ligne))
+    masque = [1, 0, 0, 1, 1, 0, 1]
+    enfant1, enfant2 = croisement_uniforme(parent1, parent2, masque)
+    print("\nCroisement uniforme (masque", masque, ") :")
+    print("  enfant 1 :", enfant1)
+    print("  enfant 2 :", enfant2)
 
-    print("\n=== Une exécution détaillée (mutation par inversion) ===")
-    best, f, hist = algorithme_genetique(mutation=mutation_inversion, graine=42)
-    afficher(best)
-    print("  Meilleure fitness aux générations 1, 10, 20, 50, 100 :",
-          [hist[i] for i in (0, 9, 19, 49, 99)])
+    # --- Algorithme génétique avec chacun des 3 croisements ---------------
+    for type_croisement in ["simple", "double", "uniforme"]:
+        print("\n==================== Croisement", type_croisement,
+              "====================\n")
+        executer(type_croisement)
