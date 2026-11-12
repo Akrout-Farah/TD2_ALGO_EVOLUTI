@@ -1,5 +1,4 @@
 # ===========================================================================
-# cedule_maintenance.py
 # Cédule de maintenance de centrales électriques par algorithme génétique
 #
 # Un individu (chromosome) = liste de 7 gènes de 4 bits (un gène par unité).
@@ -34,7 +33,7 @@ GROUPE1 = ['1100', '0110', '0011']
 # Gènes valides pour les unités 3 à 7 (1 seul intervalle de maintenance)
 GROUPE2 = ['1000', '0100', '0010', '0001']
 
-# Paramètres de l'algorithme (modifiables)
+# Paramètres de l'algorithme 
 NB_INDIVIDUS = 20        # nombre d'individus par génération
 NB_GENERATIONS = 20      # nombre de générations
 P_CROISEMENT = 0.8       # Pc : probabilité de croiser deux parents
@@ -166,11 +165,10 @@ def croiser(parent1, parent2, type_croisement):
     return croisement_uniforme(parent1, parent2)
 
 
-# ===========================================================================
 # 6. MUTATION
 #    On remplace le gène situé à la position donnée par un gène valide
 #    pour cette unité (groupe 1 pour les unités 1 et 2, groupe 2 pour les autres).
-# ===========================================================================
+
 def mutation(individu, position):
     if position < 2:
         individu[position] = random.choice(GROUPE1)
@@ -179,9 +177,8 @@ def mutation(individu, position):
     return individu
 
 
-# ===========================================================================
 # 7. AFFICHAGE
-# ===========================================================================
+
 def afficher_detail(individu):
     """Affiche la cédule d'un individu : maintenance de chaque unité et réserves."""
     print("  Chromosome :", individu)
@@ -194,9 +191,9 @@ def afficher_detail(individu):
     print("  Score (plus petite réserve) :", score(individu), "MW")
 
 
-# ===========================================================================
+
 # 8. ALGORITHME GÉNÉTIQUE (boucle principale)
-# ===========================================================================
+
 def executer(type_croisement):
     """Lance l'algorithme génétique avec le type de croisement choisi.
     Retourne le meilleur individu trouvé."""
